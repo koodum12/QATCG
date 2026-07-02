@@ -22,10 +22,13 @@ let dbPromise: Promise<Repositories> | null = null;
 /** DB 싱글턴 초기화 (service worker 재시작 시 IndexedDB에서 복원) */
 function getRepositories(): Promise<Repositories> {
   if (!dbPromise) {
-    dbPromise = AppDb.create({
-      locateFile: (file) => chrome.runtime.getURL(file),
-      persistence: new IndexedDbAdapter(),
-    }).then((db) => new Repositories(db));
+    // MV3 SW에는 XMLHttpRequest가 없어 sql.js 기본 로더가 실패하므로 WASM을 직접 fetch해 주입
+    dbPromise = fetch(chrome.runtime.getURL('sql-wasm.wasm'))
+      .then((res) => res.arrayBuffer())
+      .then((wasmBinary) =>
+        AppDb.create({ wasmBinary, persistence: new IndexedDbAdapter() }),
+      )
+      .then((db) => new Repositories(db));
     dbPromise.catch((err) => {
       logger.error('background', 'DB 초기화 실패', err);
       dbPromise = null;

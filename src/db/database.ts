@@ -65,6 +65,11 @@ export class IndexedDbAdapter implements PersistenceAdapter {
 export interface AppDbOptions {
   /** sql-wasm.wasm 파일 위치 결정 함수 (확장에서는 chrome.runtime.getURL 사용) */
   locateFile?: (file: string) => string;
+  /**
+   * 미리 로드한 WASM 바이너리. MV3 service worker에는 XMLHttpRequest가 없어
+   * sql.js의 기본 로더가 실패하므로, SW에서는 fetch로 직접 읽어 주입해야 한다.
+   */
+  wasmBinary?: ArrayBuffer;
   /** 영속화 어댑터. 미지정 시 인메모리 전용(테스트용) */
   persistence?: PersistenceAdapter;
 }
@@ -81,9 +86,11 @@ export class AppDb {
 
   /** sql.js 초기화 → 저장된 바이트 로드(있으면) → 스키마 적용 */
   static async create(options: AppDbOptions = {}): Promise<AppDb> {
-    const SQL = await initSqlJs(
-      options.locateFile ? { locateFile: options.locateFile } : undefined,
-    );
+    const config: Record<string, unknown> = {};
+    if (options.locateFile) config.locateFile = options.locateFile;
+    // wasmBinary를 주면 Emscripten이 네트워크 로드(XHR/fetch)를 건너뛴다
+    if (options.wasmBinary) config.wasmBinary = options.wasmBinary;
+    const SQL = await initSqlJs(config);
     let db: SqlJsDatabase;
     const saved = options.persistence ? await options.persistence.load() : null;
     if (saved) {
