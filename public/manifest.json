@@ -1,0 +1,19 @@
+{
+  "manifest_version": 3,
+  "name": "AI QA Test Case Generator",
+  "version": "0.1.0",
+  "description": "AI가 웹 페이지를 분석하여 QA 테스트 케이스와 입력 데이터를 자동 생성합니다.",
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "AI QA Test Case Generator"
+  },
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "permissions": ["activeTab", "scripting", "storage", "tabs"],
+  "host_permissions": ["https://api.openai.com/*"],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
+  }
+}
