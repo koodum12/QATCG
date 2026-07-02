@@ -1,20 +1,32 @@
 import { useEffect, useState } from 'react';
 import { useAppStore } from '@/store/useAppStore';
-import { DEFAULT_MODEL } from '@/services/openaiService';
+import { DEFAULT_MODEL, DEFAULT_REASONING_EFFORT } from '@/services/openaiService';
+import type { ReasoningEffort } from '@/types/messages';
 
-/** OpenAI API 키/모델 설정 모달 */
+const EFFORT_OPTIONS: Array<{ value: ReasoningEffort; label: string }> = [
+  { value: 'low', label: 'Low (빠름/저비용)' },
+  { value: 'medium', label: 'Medium (권장)' },
+  { value: 'high', label: 'High (복잡한 분석)' },
+  { value: 'xhigh', label: 'xHigh (최대 추론)' },
+];
+
+/**
+ * 모델/추론 강도 설정 모달.
+ * OpenAI API 키는 서버 .env(OPENAI_API_KEY)에서만 관리하므로 여기서는 편집하지 않고
+ * 설정 여부만 표시한다.
+ */
 export function SettingsModal({ onClose }: { onClose: () => void }) {
   const { settings, saveSettings } = useAppStore();
-  const [apiKey, setApiKey] = useState('');
   const [model, setModel] = useState(DEFAULT_MODEL);
+  const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort>(DEFAULT_REASONING_EFFORT);
 
   useEffect(() => {
-    setApiKey(settings.apiKey);
     setModel(settings.model || DEFAULT_MODEL);
+    setReasoningEffort(settings.reasoningEffort || DEFAULT_REASONING_EFFORT);
   }, [settings]);
 
   const handleSave = async () => {
-    await saveSettings({ apiKey: apiKey.trim(), model: model.trim() || DEFAULT_MODEL });
+    await saveSettings({ model: model.trim() || DEFAULT_MODEL, reasoningEffort });
     onClose();
   };
 
@@ -27,22 +39,43 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
         aria-label="설정"
       >
         <h2 className="mb-4 text-lg font-semibold">설정</h2>
-        <label className="mb-1 block text-sm font-medium">OpenAI API Key</label>
-        <input
-          type="password"
-          value={apiKey}
-          onChange={(e) => setApiKey(e.target.value)}
-          placeholder="sk-..."
-          className="mb-3 w-full rounded border border-slate-300 px-3 py-2 text-sm"
-        />
+
+        <div
+          className={`mb-4 rounded p-2 text-xs ${
+            settings.hasApiKey ? 'bg-green-50 text-green-700' : 'bg-amber-50 text-amber-700'
+          }`}
+        >
+          OpenAI API 키:{' '}
+          {settings.hasApiKey
+            ? '서버에 설정됨 (server/.env)'
+            : '미설정 — server/.env의 OPENAI_API_KEY를 채우세요.'}
+        </div>
+
         <label className="mb-1 block text-sm font-medium">모델</label>
         <input
           type="text"
           value={model}
           onChange={(e) => setModel(e.target.value)}
           placeholder={DEFAULT_MODEL}
-          className="mb-4 w-full rounded border border-slate-300 px-3 py-2 text-sm"
+          className="mb-3 w-full rounded border border-slate-300 px-3 py-2 text-sm"
         />
+
+        <label className="mb-1 block text-sm font-medium">추론 강도 (reasoning effort)</label>
+        <select
+          value={reasoningEffort}
+          onChange={(e) => setReasoningEffort(e.target.value as ReasoningEffort)}
+          className="mb-1 w-full rounded border border-slate-300 px-3 py-2 text-sm"
+        >
+          {EFFORT_OPTIONS.map((opt) => (
+            <option key={opt.value} value={opt.value}>
+              {opt.label}
+            </option>
+          ))}
+        </select>
+        <p className="mb-4 text-xs text-slate-500">
+          gpt-5.5 등 reasoning 모델에만 적용됩니다. temperature는 지원되지 않습니다.
+        </p>
+
         <div className="flex justify-end gap-2">
           <button
             type="button"

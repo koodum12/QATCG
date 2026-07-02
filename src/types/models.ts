@@ -1,8 +1,21 @@
 /** SQLite에 저장되는 도메인 모델 정의 */
 
+/** 프로젝트를 묶어서 관리하는 폴더 */
+export interface Folder {
+  id: number;
+  name: string;
+  /** 폴더 안 모든 프로젝트의 생성 시 AI에게 함께 전달되는 공통 정보 */
+  context: string;
+  createdAt: string;
+}
+
 export interface Project {
   id: number;
   name: string;
+  /** 소속 폴더. null이면 미분류 */
+  folderId: number | null;
+  /** AI에게 매 생성마다 함께 전달되는 프로젝트 추가 정보 */
+  context: string;
   createdAt: string;
 }
 

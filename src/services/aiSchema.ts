@@ -54,6 +54,49 @@ export type AiTestCase = z.infer<typeof AiTestCaseSchema>;
 export type AiResponse = z.infer<typeof AiResponseSchema>;
 
 /**
+ * OpenAI Responses API Structured Outputs(text.format = json_schema, strict: true)용 JSON Schema.
+ * strict 모드 규칙: 모든 object에 additionalProperties:false, 모든 property는 required.
+ * Zod 스키마(AiResponseSchema)와 형태를 일치시켜, 모델이 이 스키마를 그대로 지키도록 강제한다.
+ */
+export const AI_JSON_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['pageSummary', 'testCases'],
+  properties: {
+    pageSummary: { type: 'string' },
+    testCases: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['tcId', 'feature', 'purpose', 'priority', 'steps', 'inputs', 'expectedResult'],
+        properties: {
+          tcId: { type: 'string' },
+          feature: { type: 'string' },
+          purpose: { type: 'string' },
+          priority: { type: 'string', enum: ['High', 'Medium', 'Low'] },
+          steps: { type: 'array', items: { type: 'string' } },
+          inputs: {
+            type: 'array',
+            items: {
+              type: 'object',
+              additionalProperties: false,
+              required: ['field', 'value', 'category'],
+              properties: {
+                field: { type: 'string' },
+                value: { type: 'string' },
+                category: { type: 'string', enum: ['normal', 'boundary', 'exception'] },
+              },
+            },
+          },
+          expectedResult: { type: 'string' },
+        },
+      },
+    },
+  },
+} as const;
+
+/**
  * 모델 응답 텍스트에서 JSON을 추출·검증한다.
  * 코드펜스(```json ... ```)로 감싸진 응답도 처리한다.
  */

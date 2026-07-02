@@ -1,64 +1,32 @@
-import { AppDb, IndexedDbAdapter } from '@/db/database';
-import { Repositories } from '@/db/repositories';
-import { generateTestCases } from '@/services/openaiService';
-import { DEFAULT_MODEL } from '@/services/openaiService';
+import { api } from '@/lib/api';
 import { errorMessage, logger } from '@/utils/logger';
 import type {
+  ExportBundle,
+  JobHandle,
+  JobStatus,
   RuntimeRequest,
   RuntimeResponse,
   Settings,
+  TestCaseWithInputs,
 } from '@/types/messages';
+import type { Folder, Page, Project, SearchResult } from '@/types/models';
 import type { PageAnalysis } from '@/types/dom';
 
 /**
  * background service worker.
- * - sql.js DB를 소유하고 IndexedDB에 영속화
- * - popup/dashboard의 요청을 라우팅
- * - Generate 파이프라인: content script 주입 → DOM 수집 → OpenAI → DB 저장
+ *
+ * 데이터/생성은 로컬 Python 백엔드(REST)가 담당한다. 확장은 DOM 수집만 하고
+ * 생성은 서버 잡으로 넘기므로, 팝업이 닫히거나 SW가 종료돼도 생성이 계속된다.
+ * 진행 중 잡 id는 chrome.storage에 저장해 팝업 재접속 시 진행 바를 이어서 보여준다.
  */
 
-let dbPromise: Promise<Repositories> | null = null;
+const ACTIVE_JOB_KEY = 'activeJob';
 
-/** DB 싱글턴 초기화 (service worker 재시작 시 IndexedDB에서 복원) */
-function getRepositories(): Promise<Repositories> {
-  if (!dbPromise) {
-    // MV3 SW에는 XMLHttpRequest가 없어 sql.js 기본 로더가 실패하므로 WASM을 직접 fetch해 주입
-    dbPromise = fetch(chrome.runtime.getURL('sql-wasm.wasm'))
-      .then((res) => res.arrayBuffer())
-      .then((wasmBinary) =>
-        AppDb.create({ wasmBinary, persistence: new IndexedDbAdapter() }),
-      )
-      .then((db) => new Repositories(db));
-    dbPromise.catch((err) => {
-      logger.error('background', 'DB 초기화 실패', err);
-      dbPromise = null;
-    });
-  }
-  return dbPromise;
-}
-
-/** chrome.storage에서 설정 로드 */
-async function getSettings(): Promise<Settings> {
-  const stored = await chrome.storage.local.get(['apiKey', 'model']);
-  return {
-    apiKey: (stored.apiKey as string) ?? '',
-    model: (stored.model as string) || DEFAULT_MODEL,
-  };
-}
-
-async function saveSettings(settings: Settings): Promise<void> {
-  await chrome.storage.local.set({
-    apiKey: settings.apiKey,
-    model: settings.model,
-  });
-}
-
-/** 현재 활성 탭을 찾는다 */
+/** 현재 활성 탭을 찾는다 (일반 웹 페이지만 허용) */
 async function getActiveTab(): Promise<chrome.tabs.Tab> {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!tab?.id) throw new Error('활성 탭을 찾을 수 없습니다.');
-  const url = tab.url ?? '';
-  if (!/^https?:/.test(url)) {
+  if (!/^https?:/.test(tab.url ?? '')) {
     throw new Error('일반 웹 페이지에서만 분석할 수 있습니다. (chrome://, 확장 페이지 등 불가)');
   }
   return tab;
@@ -66,10 +34,7 @@ async function getActiveTab(): Promise<chrome.tabs.Tab> {
 
 /** content script를 주입하고 페이지 분석 결과를 수집 */
 async function collectFromTab(tabId: number, deep: boolean): Promise<PageAnalysis> {
-  await chrome.scripting.executeScript({
-    target: { tabId },
-    files: ['content.js'],
-  });
+  await chrome.scripting.executeScript({ target: { tabId }, files: ['content.js'] });
   const response = (await chrome.tabs.sendMessage(tabId, {
     type: 'COLLECT_PAGE',
     deep,
@@ -80,72 +45,108 @@ async function collectFromTab(tabId: number, deep: boolean): Promise<PageAnalysi
   return response.data;
 }
 
-/** Generate 파이프라인: 수집 → AI 생성 → 저장 */
-async function handleGenerate(projectId: number, deep: boolean) {
-  const repo = await getRepositories();
-  const settings = await getSettings();
+/** Generate 시작: 탭에서 DOM 수집 → 서버에 잡 생성 → 잡 id 저장 후 반환 */
+async function startGenerate(projectId: number, deep: boolean): Promise<JobHandle> {
   const tab = await getActiveTab();
-
   logger.info('background', `분석 시작: ${tab.url} (deep=${deep})`);
   const analysis = await collectFromTab(tab.id!, deep);
-
-  const output = await generateTestCases(analysis, {
-    apiKey: settings.apiKey,
-    model: settings.model,
-  });
-
-  await repo.savePromptHistory(output.prompt, output.rawResponse);
-  const result = await repo.saveAnalysisResult({
+  const { jobId } = await api.post<JobHandle>('/jobs/generate', {
     projectId,
-    url: analysis.url,
-    title: analysis.title,
-    html: analysis.html,
-    domJson: JSON.stringify({
-      dom: analysis.dom,
-      stats: analysis.stats,
-      flags: analysis.flags,
-      apiCalls: analysis.apiCalls,
-    }),
-    testCases: output.response.testCases,
+    analysis,
+    deep,
   });
-  logger.info('background', `저장 완료: page=${result.pageId}, TC ${result.testCaseCount}건`);
-  return result;
+  await chrome.storage.local.set({ [ACTIVE_JOB_KEY]: { jobId, projectId } });
+  logger.info('background', `잡 생성됨: ${jobId}`);
+  return { jobId };
 }
 
-/** 요청 타입별 라우팅 */
+/** 잡 상태 조회. 완료/오류면 활성 잡 기록을 정리한다. */
+async function getJob(jobId: string): Promise<JobStatus> {
+  const job = await api.get<JobStatus>(`/jobs/${jobId}`);
+  if (job.status === 'done' || job.status === 'error') {
+    const stored = await chrome.storage.local.get(ACTIVE_JOB_KEY);
+    if (stored[ACTIVE_JOB_KEY]?.jobId === jobId) {
+      await chrome.storage.local.remove(ACTIVE_JOB_KEY);
+    }
+  }
+  return job;
+}
+
+/** 팝업 재접속 시 진행 중이던 잡을 복원 */
+async function getActiveJob(): Promise<(JobStatus & { projectId: number }) | null> {
+  const stored = await chrome.storage.local.get(ACTIVE_JOB_KEY);
+  const active = stored[ACTIVE_JOB_KEY] as { jobId: string; projectId: number } | undefined;
+  if (!active) return null;
+  try {
+    const job = await getJob(active.jobId);
+    return { ...job, projectId: active.projectId };
+  } catch {
+    // 서버 재시작 등으로 잡이 사라졌으면 기록 정리
+    await chrome.storage.local.remove(ACTIVE_JOB_KEY);
+    return null;
+  }
+}
+
+/** 요청 타입별 라우팅 (대부분 서버 REST로 프록시) */
 async function route(request: RuntimeRequest): Promise<unknown> {
-  const repo = await getRepositories();
   switch (request.type) {
     case 'GET_PROJECTS':
-      return repo.listProjects();
-    case 'CREATE_PROJECT': {
-      const name = request.name.trim();
-      if (!name) throw new Error('프로젝트 이름을 입력하세요.');
-      return repo.createProject(name);
-    }
+      return api.get<Project[]>('/projects');
+    case 'CREATE_PROJECT':
+      return api.post<Project>('/projects', {
+        name: request.name,
+        folderId: request.folderId ?? null,
+      });
+    case 'UPDATE_PROJECT':
+      return api.patch<Project>(`/projects/${request.projectId}`, {
+        context: request.context ?? null,
+        folderId: request.folderId ?? null,
+        setFolder: request.setFolder ?? false,
+      });
     case 'DELETE_PROJECT':
-      await repo.deleteProject(request.projectId);
+      await api.del(`/projects/${request.projectId}`);
+      return null;
+    case 'GET_FOLDERS':
+      return api.get<Folder[]>('/folders');
+    case 'CREATE_FOLDER':
+      return api.post<Folder>('/folders', { name: request.name });
+    case 'UPDATE_FOLDER':
+      return api.patch<Folder>(`/folders/${request.folderId}`, { context: request.context });
+    case 'DELETE_FOLDER':
+      await api.del(`/folders/${request.folderId}`);
       return null;
     case 'GET_PAGES':
-      return repo.listPages(request.projectId);
+      return api.get<Page[]>(`/projects/${request.projectId}/pages`);
     case 'DELETE_PAGE':
-      await repo.deletePage(request.pageId);
+      await api.del(`/pages/${request.pageId}`);
       return null;
     case 'GET_TEST_CASES':
-      return repo.listTestCases(request.pageId);
-    case 'GET_INPUT_DATA':
-      return repo.listInputData(request.testcaseId);
+      return api.get<TestCaseWithInputs[]>(`/pages/${request.pageId}/testcases`);
     case 'GENERATE_TEST_CASES':
-      return handleGenerate(request.projectId, request.deep);
+      return startGenerate(request.projectId, request.deep);
+    case 'GET_JOB':
+      return getJob(request.jobId);
+    case 'GET_ACTIVE_JOB':
+      return getActiveJob();
     case 'SEARCH':
-      return repo.search(request.query);
-    case 'GET_SETTINGS':
-      return getSettings();
+      return api.get<SearchResult[]>(`/search?q=${encodeURIComponent(request.query)}`);
+    case 'GET_SETTINGS': {
+      const health = await api.get<{
+        model: string;
+        reasoningEffort: Settings['reasoningEffort'];
+        hasApiKey: boolean;
+      }>('/health');
+      return {
+        model: health.model,
+        reasoningEffort: health.reasoningEffort,
+        hasApiKey: health.hasApiKey,
+      } satisfies Settings;
+    }
     case 'SAVE_SETTINGS':
-      await saveSettings(request.settings);
+      await api.post('/config', request.settings);
       return null;
     case 'GET_EXPORT_DATA':
-      return repo.getExportBundle(request.projectId);
+      return api.get<ExportBundle>(`/projects/${request.projectId}/export`);
     default: {
       const unknown = request as { type?: string };
       throw new Error(`알 수 없는 요청: ${unknown.type}`);
@@ -155,7 +156,6 @@ async function route(request: RuntimeRequest): Promise<unknown> {
 
 chrome.runtime.onMessage.addListener(
   (request: RuntimeRequest, _sender, sendResponse) => {
-    // content script의 COLLECT_PAGE 응답 등 다른 메시지는 무시
     if (!request?.type) return undefined;
     route(request)
       .then((data) => sendResponse({ ok: true, data } satisfies RuntimeResponse))
@@ -167,4 +167,4 @@ chrome.runtime.onMessage.addListener(
   },
 );
 
-logger.info('background', 'service worker 시작');
+logger.info('background', 'service worker 시작 (백엔드 프록시 모드)');

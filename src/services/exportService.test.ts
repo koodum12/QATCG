@@ -4,7 +4,7 @@ import { flattenBundle, toCsv, toJson, toMarkdown, toXlsx } from './exportServic
 import type { ExportBundle } from '@/types/messages';
 
 const BUNDLE: ExportBundle = {
-  project: { id: 1, name: '쇼핑몰', createdAt: '2026-07-02 00:00:00' },
+  project: { id: 1, name: '쇼핑몰', folderId: null, context: '', createdAt: '2026-07-02 00:00:00' },
   pages: [
     {
       page: {

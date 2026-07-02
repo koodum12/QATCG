@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { sendRequest } from '@/lib/messaging';
 import { errorMessage } from '@/utils/logger';
-import type { Page, Project, SearchResult } from '@/types/models';
+import type { Folder, Page, Project, SearchResult } from '@/types/models';
 import type { Settings, TestCaseWithInputs } from '@/types/messages';
 
 /**
@@ -11,6 +11,7 @@ import type { Settings, TestCaseWithInputs } from '@/types/messages';
 
 interface AppState {
   projects: Project[];
+  folders: Folder[];
   pages: Page[];
   testCases: TestCaseWithInputs[];
   selectedProjectId: number | null;
@@ -23,7 +24,14 @@ interface AppState {
   loading: boolean;
 
   loadProjects: () => Promise<void>;
-  createProject: (name: string) => Promise<void>;
+  loadFolders: () => Promise<void>;
+  createFolder: (name: string) => Promise<void>;
+  /** 폴더의 AI 공통 정보(context) 저장 */
+  updateFolderInfo: (folderId: number, context: string) => Promise<void>;
+  deleteFolder: (folderId: number) => Promise<void>;
+  createProject: (name: string, folderId?: number | null) => Promise<void>;
+  /** 프로젝트의 AI 추가 정보(context)와 폴더 이동을 저장 */
+  updateProjectInfo: (projectId: number, context: string, folderId: number | null) => Promise<void>;
   deleteProject: (projectId: number) => Promise<void>;
   selectProject: (projectId: number | null) => Promise<void>;
   deletePage: (pageId: number) => Promise<void>;
@@ -32,12 +40,13 @@ interface AppState {
   search: (query: string) => Promise<void>;
   clearSearch: () => void;
   loadSettings: () => Promise<void>;
-  saveSettings: (settings: Settings) => Promise<void>;
+  saveSettings: (settings: Pick<Settings, 'model' | 'reasoningEffort'>) => Promise<void>;
   setError: (error: string | null) => void;
 }
 
 export const useAppStore = create<AppState>((set, get) => ({
   projects: [],
+  folders: [],
   pages: [],
   testCases: [],
   selectedProjectId: null,
@@ -45,7 +54,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   selectedTestCaseId: null,
   searchQuery: '',
   searchResults: null,
-  settings: { apiKey: '', model: '' },
+  settings: { model: '', reasoningEffort: 'medium', hasApiKey: false },
   error: null,
   loading: false,
 
@@ -58,9 +67,61 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
 
-  async createProject(name) {
+  async loadFolders() {
     try {
-      await sendRequest({ type: 'CREATE_PROJECT', name });
+      const folders = await sendRequest({ type: 'GET_FOLDERS' });
+      set({ folders });
+    } catch (err) {
+      set({ error: errorMessage(err) });
+    }
+  },
+
+  async createFolder(name) {
+    try {
+      await sendRequest({ type: 'CREATE_FOLDER', name });
+      await get().loadFolders();
+    } catch (err) {
+      set({ error: errorMessage(err) });
+    }
+  },
+
+  async updateFolderInfo(folderId, context) {
+    try {
+      await sendRequest({ type: 'UPDATE_FOLDER', folderId, context });
+      await get().loadFolders();
+    } catch (err) {
+      set({ error: errorMessage(err) });
+    }
+  },
+
+  async deleteFolder(folderId) {
+    try {
+      await sendRequest({ type: 'DELETE_FOLDER', folderId });
+      // 소속 프로젝트가 미분류로 이동하므로 둘 다 갱신
+      await Promise.all([get().loadFolders(), get().loadProjects()]);
+    } catch (err) {
+      set({ error: errorMessage(err) });
+    }
+  },
+
+  async createProject(name, folderId = null) {
+    try {
+      await sendRequest({ type: 'CREATE_PROJECT', name, folderId });
+      await get().loadProjects();
+    } catch (err) {
+      set({ error: errorMessage(err) });
+    }
+  },
+
+  async updateProjectInfo(projectId, context, folderId) {
+    try {
+      await sendRequest({
+        type: 'UPDATE_PROJECT',
+        projectId,
+        context,
+        folderId,
+        setFolder: true,
+      });
       await get().loadProjects();
     } catch (err) {
       set({ error: errorMessage(err) });
@@ -155,7 +216,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   async saveSettings(settings) {
     try {
       await sendRequest({ type: 'SAVE_SETTINGS', settings });
-      set({ settings });
+      // hasApiKey는 서버 소유이므로 기존 값 위에 model/effort만 병합한다
+      set((state) => ({ settings: { ...state.settings, ...settings } }));
     } catch (err) {
       set({ error: errorMessage(err) });
     }

@@ -9,13 +9,14 @@ import { SettingsModal } from '@/components/SettingsModal';
 
 /** 대시보드 루트: 헤더(검색/Export/설정) + 3단 레이아웃 */
 export function Dashboard() {
-  const { loadProjects, loadSettings, error, setError } = useAppStore();
+  const { loadProjects, loadFolders, loadSettings, error, setError } = useAppStore();
   const [settingsOpen, setSettingsOpen] = useState(false);
 
   useEffect(() => {
     loadProjects();
+    loadFolders();
     loadSettings();
-  }, [loadProjects, loadSettings]);
+  }, [loadProjects, loadFolders, loadSettings]);
 
   return (
     <div className="flex h-screen flex-col">

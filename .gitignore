@@ -3,3 +3,9 @@ dist/
 .fablize/
 *.log
 .DS_Store
+
+# server
+server/.venv/
+server/.env
+server/*.db
+__pycache__/
