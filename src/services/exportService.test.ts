@@ -24,6 +24,8 @@ const BUNDLE: ExportBundle = {
           feature: '로그인',
           purpose: '정상 로그인',
           priority: 'High',
+          difficulty: 'Easy',
+          testType: 'functional',
           steps: ['이메일 입력', '비밀번호 입력, 확인', '로그인'],
           expectedResult: '메인 이동',
           inputs: [
@@ -64,7 +66,7 @@ describe('exportService', () => {
     expect(csv.charCodeAt(0)).toBe(0xfeff);
     const lines = csv.slice(1).split('\n');
     expect(lines[0]).toBe(
-      'project,pageUrl,pageTitle,tcId,feature,purpose,priority,steps,inputs,expectedResult',
+      'project,pageUrl,pageTitle,tcId,feature,purpose,priority,difficulty,testType,steps,inputs,expectedResult',
     );
     // 쉼표가 든 절차와 따옴표가 든 입력값이 안전하게 이스케이프됐는지
     expect(csv).toContain('""b');

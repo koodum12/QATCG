@@ -41,7 +41,9 @@ CREATE TABLE IF NOT EXISTS TestCase (
   purpose TEXT NOT NULL,
   priority TEXT NOT NULL,
   steps TEXT NOT NULL,
-  expectedResult TEXT NOT NULL
+  expectedResult TEXT NOT NULL,
+  difficulty TEXT NOT NULL DEFAULT '',
+  testType TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS InputData (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -75,6 +77,8 @@ class Database:
                 "ALTER TABLE Project ADD COLUMN folderId INTEGER REFERENCES Folder(id)",
                 "ALTER TABLE Project ADD COLUMN context TEXT NOT NULL DEFAULT ''",
                 "ALTER TABLE Folder ADD COLUMN context TEXT NOT NULL DEFAULT ''",
+                "ALTER TABLE TestCase ADD COLUMN difficulty TEXT NOT NULL DEFAULT ''",
+                "ALTER TABLE TestCase ADD COLUMN testType TEXT NOT NULL DEFAULT ''",
             ):
                 try:
                     self._conn.execute(ddl)
@@ -207,6 +211,15 @@ class Database:
                     )
             self._conn.commit()
         return {"pageId": page_id, "testCaseCount": len(test_cases)}
+
+    def set_test_case_classification(
+        self, test_case_id: int, difficulty: str, test_type: str
+    ) -> None:
+        """gpt-4o-mini 분류 결과(난이도/테스트 방식)를 반영한다."""
+        self._exec(
+            "UPDATE TestCase SET difficulty = ?, testType = ? WHERE id = ?",
+            (difficulty, test_type, test_case_id),
+        )
 
     def save_prompt_history(self, prompt: str, response: str) -> None:
         self._exec(

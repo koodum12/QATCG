@@ -33,6 +33,12 @@ export interface Page {
 
 export type Priority = 'High' | 'Medium' | 'Low';
 
+/** gpt-4o-mini가 분류하는 난이도. ''는 미분류(분류 전) */
+export type Difficulty = 'Easy' | 'Medium' | 'Hard' | '';
+
+/** gpt-4o-mini가 분류하는 테스트 방식. ''는 미분류 */
+export type TestType = 'functional' | 'boundary' | 'exception' | 'ui' | '';
+
 export interface TestCase {
   id: number;
   pageId: number;
@@ -44,6 +50,8 @@ export interface TestCase {
   /** 테스트 절차 목록 */
   steps: string[];
   expectedResult: string;
+  difficulty: Difficulty;
+  testType: TestType;
 }
 
 export interface InputData {

@@ -127,6 +127,115 @@ class OpenAIError(RuntimeError):
     pass
 
 
+# ---------- 난이도/테스트 방식 분류 (gpt-4o-mini) ----------
+
+CHAT_COMPLETIONS_URL = "https://api.openai.com/v1/chat/completions"
+DEFAULT_CLASSIFY_MODEL = "gpt-4o-mini"
+
+CLASSIFY_SYSTEM_PROMPT = """당신은 QA 리드다. 주어진 테스트 케이스들의 난이도와 테스트 방식을 분류하라.
+
+난이도(difficulty) 기준:
+- Easy: 단순 클릭/입력, 절차 3단계 이하, 검증이 명확
+- Medium: 여러 입력 조합, 상태 전이, 사전 조건 필요
+- Hard: 복잡한 시나리오, 동시성/타이밍, 다단계 검증, 외부 연동
+
+테스트 방식(testType) 기준:
+- functional: 정상 시나리오(해피 패스) 기능 동작 확인
+- boundary: 경계값·최대/최소 길이·범위 한계 테스트
+- exception: 잘못된 입력, 오류·예외 처리, 비정상 흐름
+- ui: 표시/레이아웃/네비게이션/접근성 등 화면 확인
+
+모든 테스트 케이스에 대해 id별로 분류를 반환하라."""
+
+# Chat Completions Structured Outputs(strict) 스키마
+CLASSIFY_JSON_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["classifications"],
+    "properties": {
+        "classifications": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["id", "difficulty", "testType"],
+                "properties": {
+                    "id": {"type": "integer"},
+                    "difficulty": {"type": "string", "enum": ["Easy", "Medium", "Hard"]},
+                    "testType": {
+                        "type": "string",
+                        "enum": ["functional", "boundary", "exception", "ui"],
+                    },
+                },
+            },
+        }
+    },
+}
+
+
+def classify_test_cases(
+    test_cases: list[dict], api_key: str,
+    model: str = DEFAULT_CLASSIFY_MODEL, timeout: int = 120,
+) -> dict[int, dict]:
+    """테스트 케이스들의 난이도/방식을 분류해 {tcRowId: {difficulty, testType}}로 반환.
+
+    gpt-4o-mini는 reasoning 모델이 아니므로 Chat Completions + response_format(json_schema)을 쓴다.
+    """
+    if not test_cases:
+        return {}
+    if not api_key:
+        raise OpenAIError("OPENAI_API_KEY가 설정되지 않았습니다. server/.env를 확인하세요.")
+
+    compact = [
+        {
+            "id": tc["id"],
+            "feature": tc["feature"],
+            "purpose": tc["purpose"],
+            "steps": tc["steps"],
+            "expectedResult": tc["expectedResult"],
+        }
+        for tc in test_cases
+    ]
+    body = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": CLASSIFY_SYSTEM_PROMPT},
+            {"role": "user", "content": json.dumps(compact, ensure_ascii=False)},
+        ],
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {"name": "tc_classifications", "strict": True,
+                            "schema": CLASSIFY_JSON_SCHEMA},
+        },
+        "temperature": 0,
+    }
+
+    try:
+        res = requests.post(
+            CHAT_COMPLETIONS_URL,
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            json=body,
+            timeout=timeout,
+        )
+    except requests.RequestException as exc:
+        raise OpenAIError(f"분류 API 네트워크 오류: {exc}") from exc
+    if not res.ok:
+        raise OpenAIError(f"분류 API 오류 (HTTP {res.status_code}): {res.text[:300]}")
+
+    content = res.json().get("choices", [{}])[0].get("message", {}).get("content")
+    if not content:
+        raise OpenAIError("분류 응답에 내용이 없습니다.")
+    try:
+        parsed = json.loads(content)
+    except json.JSONDecodeError as exc:
+        raise OpenAIError("분류 응답이 유효한 JSON이 아닙니다.") from exc
+
+    return {
+        c["id"]: {"difficulty": c["difficulty"], "testType": c["testType"]}
+        for c in parsed.get("classifications", [])
+    }
+
+
 def generate_test_cases(
     analysis: dict, api_key: str, model: str, reasoning_effort: str,
     project_context: str = "", folder_context: str = "", timeout: int = 300,

@@ -48,6 +48,7 @@ export type RuntimeRequest =
   | { type: 'GET_PAGES'; projectId: number }
   | { type: 'DELETE_PAGE'; pageId: number }
   | { type: 'GET_TEST_CASES'; pageId: number }
+  | { type: 'CLASSIFY_PAGE'; pageId: number }
   | { type: 'GENERATE_TEST_CASES'; projectId: number; deep: boolean }
   | { type: 'GET_JOB'; jobId: string }
   | { type: 'GET_ACTIVE_JOB' }
@@ -105,6 +106,7 @@ export interface ResponseDataMap {
   GET_PAGES: Page[];
   DELETE_PAGE: null;
   GET_TEST_CASES: TestCaseWithInputs[];
+  CLASSIFY_PAGE: { classified: number };
   GENERATE_TEST_CASES: JobHandle;
   GET_JOB: JobStatus;
   GET_ACTIVE_JOB: (JobStatus & { projectId: number }) | null;

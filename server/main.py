@@ -19,7 +19,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from db import Database
-from openai_client import OpenAIError, generate_test_cases
+from openai_client import (
+    DEFAULT_CLASSIFY_MODEL,
+    OpenAIError,
+    classify_test_cases,
+    generate_test_cases,
+)
 
 load_dotenv()
 
@@ -39,6 +44,8 @@ db = Database(os.getenv("DB_PATH", "qa.db"))
 config = {
     "model": os.getenv("OPENAI_MODEL", "gpt-5.5"),
     "reasoningEffort": os.getenv("REASONING_EFFORT", "medium"),
+    # 난이도/테스트 방식 분류용 경량 모델
+    "classifyModel": os.getenv("CLASSIFY_MODEL", DEFAULT_CLASSIFY_MODEL),
 }
 
 # 잡 레지스트리 (프로세스 메모리). 진행 바를 위한 stage/progress를 담는다.
@@ -178,6 +185,26 @@ def get_test_cases(page_id: int) -> list[dict]:
     return db.list_test_cases(page_id)
 
 
+def _classify_page(page_id: int) -> int:
+    """페이지의 전체 TC를 gpt-4o-mini로 분류해 저장. 분류된 건수를 반환."""
+    tcs = db.list_test_cases(page_id)
+    mapping = classify_test_cases(
+        tcs, api_key=os.getenv("OPENAI_API_KEY", ""), model=config["classifyModel"]
+    )
+    for tc_id, cls in mapping.items():
+        db.set_test_case_classification(tc_id, cls["difficulty"], cls["testType"])
+    return len(mapping)
+
+
+@app.post("/pages/{page_id}/classify")
+def classify_page(page_id: int) -> dict:
+    """기존 페이지의 TC들을 수동으로 (재)분류한다."""
+    try:
+        return {"classified": _classify_page(page_id)}
+    except OpenAIError as exc:
+        raise HTTPException(502, str(exc)) from exc
+
+
 @app.get("/search")
 def search(q: str = "") -> list[dict]:
     q = q.strip()
@@ -207,7 +234,7 @@ def _run_generate(job_id: str, project_id: int, analysis: dict) -> None:
             project_context=project.get("context", ""),
             folder_context=(folder or {}).get("context", ""),
         )
-        _set_job(job_id, stage="결과 저장 중", progress=85)
+        _set_job(job_id, stage="결과 저장 중", progress=80)
         db.save_prompt_history(out["prompt"], out["raw"])
         result = db.save_analysis_result(
             project_id=project_id,
@@ -217,6 +244,12 @@ def _run_generate(job_id: str, project_id: int, analysis: dict) -> None:
             dom_json=analysis_dom_json(analysis),
             test_cases=out["response"]["testCases"],
         )
+        # 난이도/테스트 방식 분류 (gpt-4o-mini) — 실패해도 생성 결과는 유지한다
+        _set_job(job_id, stage="난이도/방식 분류 중 (gpt-4o-mini)", progress=90)
+        try:
+            _classify_page(result["pageId"])
+        except OpenAIError as exc:
+            print(f"[classify] 분류 실패(생성 결과는 저장됨): {exc}")
         _set_job(job_id, status="done", stage="완료", progress=100, result=result)
     except OpenAIError as exc:
         _set_job(job_id, status="error", stage="오류", progress=100, error=str(exc))

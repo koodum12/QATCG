@@ -15,6 +15,8 @@ export interface FlatRow {
   feature: string;
   purpose: string;
   priority: string;
+  difficulty: string;
+  testType: string;
   steps: string;
   inputs: string;
   expectedResult: string;
@@ -33,6 +35,8 @@ export function flattenBundle(bundle: ExportBundle): FlatRow[] {
         feature: tc.feature,
         purpose: tc.purpose,
         priority: tc.priority,
+        difficulty: tc.difficulty || '',
+        testType: tc.testType || '',
         steps: tc.steps.map((s, i) => `${i + 1}. ${s}`).join('\n'),
         inputs: tc.inputs.map((i) => `${i.field}=${i.value} (${i.category})`).join('\n'),
         expectedResult: tc.expectedResult,
@@ -93,6 +97,8 @@ const CSV_HEADERS: Array<keyof FlatRow> = [
   'feature',
   'purpose',
   'priority',
+  'difficulty',
+  'testType',
   'steps',
   'inputs',
   'expectedResult',

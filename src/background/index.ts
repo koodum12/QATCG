@@ -122,6 +122,8 @@ async function route(request: RuntimeRequest): Promise<unknown> {
       return null;
     case 'GET_TEST_CASES':
       return api.get<TestCaseWithInputs[]>(`/pages/${request.pageId}/testcases`);
+    case 'CLASSIFY_PAGE':
+      return api.post<{ classified: number }>(`/pages/${request.pageId}/classify`);
     case 'GENERATE_TEST_CASES':
       return startGenerate(request.projectId, request.deep);
     case 'GET_JOB':
